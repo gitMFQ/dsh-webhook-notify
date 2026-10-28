@@ -1,0 +1,56 @@
+{
+  "name": "dsh-webhook-notify",
+  "version": "0.4.0",
+  "private": true,
+  "type": "module",
+  "description": "DSH 通知插件：需要你操作 / 回复完成 / 出错时，从宿主进程把通知推送到任意 Webhook（自定义方法、请求头、请求体模板与订阅事件，无浏览器跨域限制），并可弹出浏览器系统通知（参考 dsh-notify-me，点击通知回到对应会话）",
+  "keywords": [
+    "dsh",
+    "deepseek-harness",
+    "cordis",
+    "webhook",
+    "notification",
+    "notify",
+    "push",
+    "webhook 通知",
+    "消息提醒",
+    "browser-notification",
+    "desktop-notification"
+  ],
+  "license": "MIT",
+  "main": "lib/index.js",
+  "exports": {
+    ".": "./lib/index.js",
+    "./client": "./lib/client.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib",
+    "cordis.patch.yml",
+    "README.md"
+  ],
+  "scripts": {
+    "test": "node --test test/",
+    "test:watch": "node --test --watch test/"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "inject": [
+        "@deepseek-ai/dsh-client-locale",
+        "@deepseek-ai/dsh-client-ui-slots"
+      ]
+    }
+  },
+  "peerDependencies": {
+    "@deepseek-ai/schemastery": "*"
+  },
+  "peerDependenciesMeta": {
+    "@deepseek-ai/schemastery": {
+      "optional": true
+    }
+  }
+}

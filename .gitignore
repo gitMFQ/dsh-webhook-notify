@@ -1,0 +1,8 @@
+# 指向 profile 依赖的绝对软链，仅本地跑测试用
+node_modules
+
+# 个人私有指令文件
+CLAUDE.local.md
+
+.DS_Store
+*.log

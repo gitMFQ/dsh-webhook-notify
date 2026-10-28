@@ -1,0 +1,42 @@
+# dsh-webhook-notify bundle patch
+#
+# 安装到 profile 后由 dsh 启动时自动加载本 patch，插入 webhook-notify 插件行。
+#
+# 端点通过设置页（设置 → Webhook 通知）增删改，保存会写回 profile 的
+# cordis.patch.yml；这里只放一份空默认值。
+- insert:
+    - id: webhook-notify
+      name: dsh-webhook-notify
+      config:
+        endpoints: []
+        notifyAttention: true
+        notifyDone: true
+        notifyError: true
+        minIntervalMs: 0
+        timeoutMs: 10000
+        textTemplate: ''
+        logDeliveries: true
+        debug: false
+        # 浏览器通知（参考 dsh-notify-me）：除了推 Webhook，也在系统通知中心弹通知。
+        browserNotify: true
+        browserAttention: true
+        browserDone: true
+        browserError: true
+        browserCurrentQuiet: true
+        browserDoneHiddenOnly: true
+        browserIgnoreSubagent: true
+        browserAutoFocus: true
+        # PWA：可安装为应用。manifest 由插件在宿主原 manifest 基础上合并生成
+        # （只补图标与启动字段，不改宿主的 display / display_override /
+        # theme_color），这里只放开关。
+        pwaEnabled: true
+        pwaOffline: true
+        pwaName: ''
+        pwaShortName: ''
+        pwaBackgroundColor: ''
+        # Web Push：页面全关也能收到提醒（需要在页面里授权并订阅）。
+        pushEnabled: false
+        pushSubject: 'mailto:dsh-webhook-notify@localhost'
+        # 宿主只能经代理出网时填这里（例如 http://127.0.0.1:7890），否则
+        # FCM / WNS 这类推送服务会直接 fetch failed。留空=直连。
+        pushProxy: ''
