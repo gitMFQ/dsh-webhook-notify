@@ -4,13 +4,12 @@
  * 真的把 worker 源码跑起来（vm 里的假 SW 全局），然后派发 push /
  * pushsubscriptionchange / notificationclick 事件，验证：
  * - 推送载荷能变成一条和页面内通知同形的通知（点击后能回到会话）；
- * - 订阅失效会通知页面重新订阅；
- * - 离线兜底只在开关打开时挂上 fetch 监听。
+ * - 订阅失效会通知页面重新订阅。
  */
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import vm from 'node:vm';
-import { buildServiceWorkerSource, SERVICE_WORKER_SOURCE } from '../lib/sw.js';
+import { SERVICE_WORKER_SOURCE } from '../lib/sw.js';
 
 /** 起一个假的 Service Worker 全局。 */
 function bootWorker(source = SERVICE_WORKER_SOURCE, options = {}) {
@@ -18,8 +17,6 @@ function bootWorker(source = SERVICE_WORKER_SOURCE, options = {}) {
   const shown = [];
   const posted = [];
   const broadcasts = [];
-  const cachePuts = [];
-  let pendingPuts = 0;
   const clients = options.clients ?? [
     { postMessage: (message) => posted.push(message), visibilityState: 'visible', focus: () => {} },
   ];
@@ -47,20 +44,6 @@ function bootWorker(source = SERVICE_WORKER_SOURCE, options = {}) {
       matchAll: async () => clients,
       claim: async () => {},
     },
-    caches: {
-      open: async () => ({
-        put: async () => {
-          pendingPuts += 1;
-          // 模拟异步落盘：若没被 await，断言时 pendingPuts 仍 > 0。
-          await new Promise((resolve) => setTimeout(resolve, 5));
-          pendingPuts -= 1;
-          cachePuts.push(1);
-        },
-      }),
-      match: async () => null,
-      keys: async () => [],
-      delete: async () => {},
-    },
     skipWaiting: async () => {},
   };
   vm.runInNewContext(source, {
@@ -70,12 +53,6 @@ function bootWorker(source = SERVICE_WORKER_SOURCE, options = {}) {
     Request,
     URL,
     console,
-    // worker 的 fetch 事件处理会真的发网络请求；这里给一个总是成功的桩，
-    // 让缓存分支能跑起来（断言的是缓存行为，不是网络）。
-    fetch: async () => new Response('<!doctype html><title>DSH</title>', {
-      status: 200,
-      headers: { 'content-type': 'text/html; charset=utf-8' },
-    }),
   });
   return {
     sw,
@@ -83,10 +60,6 @@ function bootWorker(source = SERVICE_WORKER_SOURCE, options = {}) {
     shown,
     posted,
     broadcasts,
-    cachePuts,
-    get pendingPuts() {
-      return pendingPuts;
-    },
   };
 }
 
@@ -159,16 +132,6 @@ test('notificationclick：把点击转发给页面并带上会话', async () => 
   assert.ok(click, '应把点击转发给页面');
   assert.equal(click.sessionId, 's-7');
   assert.equal(click.kind, 'done');
-});
-
-test('离线兜底：开关打开才挂 fetch 监听', () => {
-  const on = bootWorker(buildServiceWorkerSource({ offline: true }));
-  const off = bootWorker(buildServiceWorkerSource({ offline: false }));
-  assert.ok(on.listeners.has('fetch'), '开启时应监听 fetch');
-  assert.ok(!off.listeners.has('fetch'), '关闭时不应监听 fetch');
-  // 两种情况下都保留推送能力。
-  assert.ok(on.listeners.has('push'));
-  assert.ok(off.listeners.has('push'));
 });
 
 test('notificationclick：同一次点击只投递一次（不叠加 BroadcastChannel）', async () => {
@@ -260,46 +223,6 @@ test('notificationclick：没有可达页面时才退回 BroadcastChannel', asyn
   await event.promise;
   assert.equal(broadcasts.length, 1, '无页面时应广播一条');
   assert.equal(broadcasts[0].type, 'notificationclick');
-});
-
-test('离线兜底：只缓存应用外壳（根路径、无查询串）', async () => {
-  const { listeners, cachePuts } = bootWorker(buildServiceWorkerSource({ offline: true }));
-  const handler = listeners.get('fetch');
-
-  const run = async (url) => {
-    const waits = [];
-    handler({
-      request: { method: 'GET', mode: 'navigate', url },
-      respondWith(promise) {
-        waits.push(promise);
-      },
-    });
-    await Promise.all(waits);
-  };
-
-  await run('http://127.0.0.1:3080/');
-  assert.equal(cachePuts.length, 1, '根路径应写入缓存');
-  // 带查询串 / 子路径的导航不写缓存：避免断网时把旧外壳当成别的地址。
-  await run('http://127.0.0.1:3080/?session=secret');
-  await run('http://127.0.0.1:3080/some/deep/link');
-  assert.equal(cachePuts.length, 1, '带查询或子路径的导航不应写缓存');
-});
-
-test('离线兜底：cache.put 挂进 respondWith 生命周期', async () => {
-  const worker = bootWorker(buildServiceWorkerSource({ offline: true }));
-  const waits = [];
-  worker.listeners.get('fetch')({
-    request: { method: 'GET', mode: 'navigate', url: 'http://127.0.0.1:3080/' },
-    respondWith(promise) {
-      waits.push(promise);
-    },
-  });
-  assert.equal(waits.length, 1);
-  await Promise.all(waits);
-  // respondWith 的 Promise 结束时，写入必须已经完成（否则 worker 可能被
-  // 提前终止，缓存时有时无）。
-  assert.equal(worker.pendingPuts, 0, 'respondWith 完成后不应还有未完成的 cache.put');
-  assert.equal(worker.cachePuts.length, 1);
 });
 
 test('worker 源码自包含：不引用宿主模块', () => {

@@ -26,14 +26,6 @@
         browserDoneHiddenOnly: true
         browserIgnoreSubagent: true
         browserAutoFocus: true
-        # PWA：可安装为应用。manifest 由插件在宿主原 manifest 基础上合并生成
-        # （只补图标与启动字段，不改宿主的 display / display_override /
-        # theme_color），这里只放开关。
-        pwaEnabled: true
-        pwaOffline: true
-        pwaName: ''
-        pwaShortName: ''
-        pwaBackgroundColor: ''
         # Web Push：页面全关也能收到提醒（需要在页面里授权并订阅）。
         pushEnabled: false
         pushSubject: 'mailto:dsh-webhook-notify@localhost'

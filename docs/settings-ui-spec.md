@@ -579,7 +579,7 @@ ctx.slots.inject('settings.section', () =>
   color: var(--dsw-alias-state-success-primary, #22c55e);
 }
 
-/* 徽标（事件类型、方法、PWA 检查结果）。有 primitives.Tag 时优先用它 */
+/* 徽标（事件类型、方法）。有 primitives.Tag 时优先用它 */
 .wn-chip {
   display: inline-flex;
   align-items: center;

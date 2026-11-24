@@ -1,5 +1,5 @@
 /**
- * 宿主新增路由的测试：manifest 下发、Web Push 的密钥/订阅/测试推送。
+ * 宿主新增路由的测试：Web Push 的密钥/订阅/测试推送。
  */
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
@@ -23,11 +23,10 @@ function fakeRes() {
   };
 }
 
-/** 挂一个假的宿主环境，返回路由表、index 变换器与配置写入记录。 */
+/** 挂一个假的宿主环境，返回路由表与配置写入记录。 */
 function mount(config = {}) {
   const routes = new Map();
   const edits = [];
-  let indexTap = null;
   // 有状态的假编辑器：edit 的入参是「当前已保存的配置」，和真实
   // configEditor 一样。用固定 {} 做基准会让并发覆盖测不出来。
   const stored = { endpoints: [], ...config };
@@ -36,12 +35,6 @@ function mount(config = {}) {
       register(route) {
         routes.set(route.path, route.handler);
         return () => routes.delete(route.path);
-      },
-      tapIndex(transform) {
-        indexTap = transform;
-        return () => {
-          indexTap = null;
-        };
       },
       getOrigin() {
         return 'http://127.0.0.1:3080';
@@ -83,7 +76,7 @@ function mount(config = {}) {
     logger: () => ({ info() {}, warn() {}, error() {}, debug() {} }),
   };
   apply(ctx, stored);
-  return { routes, edits, stored, indexTap: () => indexTap };
+  return { routes, edits, stored };
 }
 
 /** 构造一个请求。 */
@@ -95,271 +88,6 @@ function req(method, url, headers = {}) {
 function json(res) {
   return JSON.parse(res.body);
 }
-
-test('manifest 路由：补齐图标但保留宿主的 display 与 theme_color', async () => {
-  const { routes } = mount();
-  const original = globalThis.fetch;
-  globalThis.fetch = async (url) => {
-    if (String(url).endsWith('/favicon.svg')) {
-      return new Response('<svg viewBox="0 0 50 50"><path d="M10 10 L40 10 L40 40 L10 40 Z" fill="#000"/></svg>', { status: 200 });
-    }
-    assert.equal(url, 'http://127.0.0.1:3080/manifest.webmanifest');
-    return new Response(
-      JSON.stringify({
-        name: 'DeepSeek Harness',
-        short_name: 'DSH',
-        start_url: './',
-        scope: './',
-        display: 'fullscreen',
-        theme_color: '#151517',
-        icons: [{ src: 'favicon.svg', sizes: 'any', type: 'image/svg+xml' }],
-      }),
-      { status: 200, headers: { 'content-type': 'application/json' } },
-    );
-  };
-  try {
-    const res = fakeRes();
-    await routes.get(ROUTES.manifest)(
-      req('GET', '/webhook-notify/manifest.webmanifest?src=%2Fmanifest.webmanifest', { referer: 'http://127.0.0.1:3080/' }),
-      res,
-    );
-    assert.equal(res.status, 200);
-    assert.match(res.headers['content-type'], /application\/manifest\+json/);
-    const manifest = json(res);
-    assert.equal(manifest.name, 'DeepSeek Harness');
-    // 窗口显示模式归宿主：fullscreen 原样下发，插件不再改写、也不产 display_override。
-    assert.equal(manifest.display, 'fullscreen');
-    assert.equal(manifest.display_override, undefined);
-    assert.equal(manifest.theme_color, '#151517', '宿主的主题色应原样保留');
-    // manifest 换了位置，相对地址要按原位置解析——但写成根相对，
-    // origin 由浏览器补（反向代理换协议/域名不会变成混合内容）。
-    assert.equal(manifest.start_url, '/');
-    assert.equal(manifest.id, '/');
-    // 宿主的透明 SVG（sizes: "any"）要从 manifest 里换掉：浏览器会优先选它，
-    // 装出来的图标就是一张透明底的 logo。
-    assert.ok(!manifest.icons.some((icon) => icon.sizes === 'any'), '不应保留 sizes:any 的 SVG');
-    assert.equal(manifest.icons[0].src, '/webhook-notify/icon-192.png');
-    // 还要补上 Chrome 要求的 192/512 位图图标。
-    const sizes = manifest.icons.map((icon) => icon.sizes);
-    assert.ok(sizes.includes('192x192'), '应有 192x192 图标');
-    assert.ok(sizes.includes('512x512'), '应有 512x512 图标');
-    assert.ok(manifest.icons.some((icon) => icon.purpose === 'maskable'), '应有 maskable 图标');
-  } finally {
-    globalThis.fetch = original;
-  }
-});
-
-test('manifest 路由：反向代理下也不会写出混合内容地址', async () => {
-  // 之前的坑：manifest 里的 start_url / 图标写死成宿主推导出来的
-  // `http://host/...`。经过 https 反向代理后这些地址就是混合内容，浏览器
-  // 静默判为不可安装——地址栏没有安装图标，也不派发 beforeinstallprompt。
-  const { routes } = mount();
-  const original = globalThis.fetch;
-  globalThis.fetch = async (url) => {
-    if (String(url).endsWith('/favicon.svg')) {
-      return new Response('<svg viewBox="0 0 50 50"><path d="M10 10 L40 10 L40 40 L10 40 Z" fill="#000"/></svg>', { status: 200 });
-    }
-    return new Response(
-      JSON.stringify({ name: 'DeepSeek Harness', short_name: 'DSH', start_url: './', scope: './', display: 'standalone', icons: [{ src: 'favicon.svg', sizes: 'any' }] }),
-      { status: 200 },
-    );
-  };
-  const proxySetups = [
-    // 代理透传了转发头。
-    { host: 'dsh.osai.eu.org', 'x-forwarded-proto': 'https' },
-    // 代理没传 X-Forwarded-Proto：宿主只能猜 http。
-    { host: 'dsh.osai.eu.org' },
-    // 代理把 Host 改写成后端地址。
-    { host: '127.0.0.1:3080', 'x-forwarded-proto': 'https' },
-  ];
-  try {
-    for (const headers of proxySetups) {
-      const res = fakeRes();
-      await routes.get(ROUTES.manifest)(req('GET', '/webhook-notify/manifest.webmanifest?src=.%2Fmanifest.webmanifest', headers), res);
-      assert.equal(res.status, 200, JSON.stringify(headers));
-      const manifest = json(res);
-      const urls = [manifest.start_url, manifest.scope, manifest.id, ...manifest.icons.map((icon) => icon.src)];
-      for (const url of urls) {
-        assert.ok(String(url).startsWith('/'), `应写成根相对地址：${url}（${JSON.stringify(headers)}）`);
-      }
-      assert.equal(manifest.start_url, '/');
-    }
-  } finally {
-    globalThis.fetch = original;
-  }
-});
-
-test('早期捕获脚本路由：下发 text/javascript', async () => {
-  const { routes } = mount();
-  const res = fakeRes();
-  await routes.get(ROUTES.capture)(req('GET', '/webhook-notify/pwa-capture.js'), res);
-  assert.equal(res.status, 200);
-  assert.match(res.headers['content-type'], /text\/javascript/);
-  // 捕获脚本不能拦默认行为：拦掉就等于删除浏览器自己的安装入口。
-  assert.ok(!/preventDefault/.test(String(res.body)), '捕获脚本不应调用 preventDefault');
-  assert.match(String(res.body), /beforeinstallprompt/);
-});
-
-test('图标路由：下发 PNG', async () => {
-  const { routes } = mount();
-  const original = globalThis.fetch;
-  globalThis.fetch = async (url) => {
-    if (String(url).endsWith('/favicon.svg')) {
-      return new Response('<svg viewBox="0 0 50 50"><path d="M10 10 L40 10 L40 40 L10 40 Z" fill="#000"/></svg>', { status: 200 });
-    }
-    return new Response('{}', { status: 200 });
-  };
-  try {
-    const res = fakeRes();
-    await routes.get(ROUTES.icon192)(req('GET', '/webhook-notify/icon-192.png'), res);
-    assert.equal(res.status, 200);
-    assert.equal(res.headers['content-type'], 'image/png');
-    // PNG 签名。
-    assert.equal(res.body.subarray(1, 4).toString('ascii'), 'PNG');
-    // manifest 里声明的 sizes 必须和真实像素一致。
-    assert.equal(res.body.readUInt32BE(16), 192);
-  } finally {
-    globalThis.fetch = original;
-  }
-});
-
-test('图标路由：抓 logo 失败用兜底图标，但不会一直钉死（等宿主起来后自愈）', async () => {
-  const { routes } = mount();
-  const { fallbackIcon } = await import('../lib/icon.js');
-  const original = globalThis.fetch;
-  const realNow = Date.now;
-  let mode = 'fail';
-  globalThis.fetch = async (url) => {
-    if (mode === 'fail') throw new Error('connect ECONNREFUSED');
-    if (String(url).endsWith('/favicon.svg')) {
-      return new Response('<svg viewBox="0 0 50 50"><path d="M10 10 L40 10 L40 40 L10 40 Z"/></svg>', { status: 200 });
-    }
-    return new Response('{}', { status: 200 });
-  };
-  try {
-    // 宿主刚启动、webServer 还没监听：先给兜底铃铛。
-    const first = fakeRes();
-    await routes.get(ROUTES.icon512)(req('GET', '/webhook-notify/icon-512.png'), first);
-    assert.deepEqual(first.body, fallbackIcon(512), '抓不到 logo 时应下发内置图标');
-
-    // 一分钟后再取：重新尝试宿主 logo，成功后不再用兜底。
-    mode = 'ok';
-    Date.now = () => realNow() + 61_000;
-    const second = fakeRes();
-    await routes.get(ROUTES.icon512)(req('GET', '/webhook-notify/icon-512.png'), second);
-    assert.notDeepEqual(second.body, fallbackIcon(512), '过期后应重新抓宿主 logo');
-  } finally {
-    globalThis.fetch = original;
-    Date.now = realNow;
-  }
-});
-
-test('manifest 路由：抓不到原 manifest 时跳回原地址（保住可安装性）', async () => {
-  const { routes } = mount();
-  const original = globalThis.fetch;
-  globalThis.fetch = async () => {
-    throw new Error('offline');
-  };
-  try {
-    const res = fakeRes();
-    await routes.get(ROUTES.manifest)(
-      req('GET', '/webhook-notify/manifest.webmanifest?src=%2Fmanifest.webmanifest'),
-      res,
-    );
-    assert.equal(res.status, 302);
-    assert.equal(res.location, 'http://127.0.0.1:3080/manifest.webmanifest');
-  } finally {
-    globalThis.fetch = original;
-  }
-});
-
-test('manifest 路由：关闭 pwaEnabled 后不提供 manifest', async () => {
-  const { routes } = mount({ pwaEnabled: false });
-  const res = fakeRes();
-  await routes.get(ROUTES.manifest)(req('GET', '/webhook-notify/manifest.webmanifest'), res);
-  assert.equal(res.status, 404);
-});
-
-test('manifest 路由：src 不能用来读取并回显本机其它接口', async () => {
-  // 回归：曾经 ?src=/webhook-notify/state 会让宿主回源抓自己的 state 路由，
-  // 再把整份 JSON 当 manifest 合并返回——端点 Authorization 头与私密地址
-  // 就是这样泄露出去的。这里必须拒绝，且一次本机抓取都不能发生。
-  const { routes } = mount();
-  const original = globalThis.fetch;
-  const fetched = [];
-  globalThis.fetch = async (url) => {
-    fetched.push(String(url));
-    return new Response(
-      JSON.stringify({ name: 'leaked', endpoints: [{ headers: { Authorization: 'Bearer TOP-SECRET' } }] }),
-      { status: 200, headers: { 'content-type': 'application/json' } },
-    );
-  };
-  try {
-    const cases = [
-      '/webhook-notify/state',
-      'https://evil.example/manifest.webmanifest',
-      '/manifest.webmanifest?x=1',
-      '//evil.example/manifest.webmanifest',
-    ];
-    for (const src of cases) {
-      const res = fakeRes();
-      await routes.get(ROUTES.manifest)(
-        req('GET', `/webhook-notify/manifest.webmanifest?src=${encodeURIComponent(src)}`),
-        res,
-      );
-      assert.equal(res.status, 400, `应拒绝 ${src}`);
-      assert.ok(!String(res.body).includes('TOP-SECRET'), '不得回显任何本机数据');
-    }
-    assert.deepEqual(fetched, [], '非法 src 不应触发任何回源抓取');
-  } finally {
-    globalThis.fetch = original;
-  }
-});
-
-test('manifest 路由：抓到 HTML 而不是 manifest 时降级跳回原地址', async () => {
-  const { routes } = mount();
-  const original = globalThis.fetch;
-  globalThis.fetch = async () => new Response('<html>not a manifest</html>', {
-    status: 200,
-    headers: { 'content-type': 'text/html' },
-  });
-  try {
-    const res = fakeRes();
-    await routes.get(ROUTES.manifest)(req('GET', '/webhook-notify/manifest.webmanifest?src=%2Fmanifest.webmanifest'), res);
-    assert.equal(res.status, 302);
-    assert.equal(res.location, 'http://127.0.0.1:3080/manifest.webmanifest');
-  } finally {
-    globalThis.fetch = original;
-  }
-});
-
-test('图标路由：伪造 Host / X-Forwarded-* 不会让宿主去抓外部地址（SSRF）', async () => {
-  const { routes } = mount();
-  const original = globalThis.fetch;
-  const fetched = [];
-  globalThis.fetch = async (url) => {
-    fetched.push(String(url));
-    return new Response('<svg viewBox="0 0 50 50"><path d="M10 10 L40 10 L40 40 L10 40 Z"/></svg>', { status: 200 });
-  };
-  try {
-    const res = fakeRes();
-    await routes.get(ROUTES.icon192)(
-      req('GET', '/webhook-notify/icon-192.png', {
-        host: 'attacker.example',
-        'x-forwarded-host': 'attacker.example',
-        'x-forwarded-proto': 'https',
-      }),
-      res,
-    );
-    assert.equal(res.status, 200);
-    assert.ok(fetched.length > 0);
-    for (const url of fetched) {
-      assert.ok(url.startsWith('http://127.0.0.1:3080/'), `回源必须固定走本机，实际 ${url}`);
-    }
-  } finally {
-    globalThis.fetch = original;
-  }
-});
 
 test('设置页保存：无法覆盖 VAPID 私钥与推送订阅', async () => {
   const { routes, edits } = mount({
@@ -631,21 +359,6 @@ test('反向代理：X-Forwarded-Host 与浏览器 Origin 一致时写接口不�
   assert.equal(foreign.status, 403, '跨站 Origin 必须继续拒绝');
 });
 
-test('index 变换：改 manifest 链接并注入早期安装提示捕获脚本', () => {
-  const { indexTap } = mount();
-  const html = '<html><head><link rel="manifest" href="./manifest.webmanifest" /></head></html>';
-  const out = indexTap()(html);
-  assert.match(out, /href="\/webhook-notify\/manifest\.webmanifest\?src=\.%2Fmanifest\.webmanifest"/);
-  // 必须在 <head> 最前面：赶在浏览器派发 beforeinstallprompt 之前执行。
-  assert.match(out, /<head><script src="\/webhook-notify\/pwa-capture\.js"/);
-  // 宿主可能重复调用 tap，不能叠出多个脚本。
-  assert.equal(indexTap()(out).split('pwa-capture.js').length - 1, 1);
-  // 状态栏 / 导航栏 / 窗口显示模式都归宿主，插件不再往页面里写这些东西。
-  assert.ok(!out.includes('theme-color'), '不应注入 theme-color');
-  assert.ok(!out.includes('safe-area'), '不应注入底部安全区样式');
-  assert.ok(!out.includes('viewport-fit'), '不应改写 viewport');
-});
-
 test('push 路由：公钥可用且订阅可增删', async () => {
   const { routes, edits } = mount();
 
@@ -708,8 +421,6 @@ test('push 路由：状态接口不泄露 VAPID 私钥', async () => {
   // 但开关与联系地址要能读到。
   assert.equal(typeof state.config.pushEnabled, 'boolean');
   assert.match(state.config.pushSubject, /^mailto:/);
-  // 图标还没生成过：状态里如实是 null，不会为了这个字段去栅格化。
-  assert.equal(state.pwa.iconSource, null);
 });
 
 test('端到端：宿主把推送发到本地推送服务并能解密', async () => {

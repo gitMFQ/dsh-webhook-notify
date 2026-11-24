@@ -87,11 +87,12 @@ async function waitFor(predicate, timeout = 3000) {
 test('turn/end completed 触发 done 推送，正文带助手最后一条文本', async () => {
   received = [];
   const ctx = fakeCtx();
-  apply(ctx, { endpoints: [endpointFor('/done')] });
+  apply(ctx, { endpoints: [endpointFor('/done', { body: '{"content":"{{content}}","session":"{{session}}"}' })] });
   const emit = ctx.handlers.get('session/event');
   assert.ok(emit, 'session/event 未注册');
 
-  const session = { header: { id: 'sess-1', title: '我的会话' } };
+  const session = { header: { id: 'sess-1' } };
+  emit(session, { type: 'session/title', data: { title: '我的会话' } });
   emit(session, {
     type: 'assistant/message',
     data: { message: { content: [{ type: 'text', text: '这是最终回答' }] } },
@@ -100,9 +101,25 @@ test('turn/end completed 触发 done 推送，正文带助手最后一条文本'
 
   assert.ok(await waitFor(() => received.length === 1), '没有收到推送');
   const payload = JSON.parse(received[0].body);
-  assert.equal(payload.event, 'done');
+  assert.equal(payload.event, undefined);
   assert.match(payload.content, /这是最终回答/);
   assert.equal(received[0].method, 'POST');
+  assert.equal(payload.session, '我的会话');
+});
+
+test('session/title 事件累积会话标题（SessionHeader 无 title 时也能带上）', async () => {
+  received = [];
+  const ctx = fakeCtx();
+  apply(ctx, { endpoints: [endpointFor('/title', { body: '{"session":"{{session}}"}' })] });
+  const emit = ctx.handlers.get('session/event');
+
+  const session = { header: { id: 'sess-title' } };
+  emit(session, { type: 'session/title', data: { title: '来自事件的标题' } });
+  emit(session, { type: 'turn/end', data: { reason: { kind: 'completed' } } });
+
+  assert.ok(await waitFor(() => received.length === 1), '没有收到推送');
+  const payload = JSON.parse(received[0].body);
+  assert.equal(payload.session, '来自事件的标题');
 });
 
 test('done 正文最多 21000 字符，超长回复截断且带省略号', async () => {

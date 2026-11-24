@@ -4,16 +4,16 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 项目
 
-DSH（DeepSeek Harness）通知插件：宿主进程推 Webhook、浏览器系统通知、PWA 与 Web Push。
+DSH（DeepSeek Harness）通知插件：宿主进程推 Webhook、浏览器系统通知与 Web Push。
 纯 ESM JavaScript，**无构建、无 lint / 格式化脚本、无 CI**，改完直接跑测试。中文注释与文档是既有风格。
 
 **零运行时依赖**（只有可选 peer `@deepseek-ai/schemastery`）：`lib/push.js` 手写 VAPID / HKDF / aes128gcm，
-`lib/icon.js` 手写 SVG 栅格化 + zlib PNG，`lib/sw.js` 手写 Service Worker。不要为这些已有能力引入库
+`lib/sw.js` 手写 Service Worker。不要为这些已有能力引入库
 （例如 `web-push`、图像库）。
 
 ## 命令
 
-- `npm test` — 即 `node --test test/`，当前 116 项；测试自带本地 HTTP 假宿主，不访问外网。
+- `npm test` — 即 `node --test test/`，当前 73 项；测试自带本地 HTTP 假宿主，不访问外网。
 - 单文件：`node --test test/send.test.js`
 - 单用例：`node --test --test-name-pattern '节流' test/`
 - `node_modules` 是指向 `/root/.dsh/profiles/web/node_modules` 的**绝对软链**，仅为测试解析 `@deepseek-ai/schemastery`。
@@ -44,7 +44,6 @@ DSH（DeepSeek Harness）通知插件：宿主进程推 Webhook、浏览器系�
 
 ## 不要破坏的安全不变量
 
-- manifest 回源 `?src=` 只接受宿主自己的 `/manifest.webmanifest`，拒绝 query / hash / 跨源地址。
 - `3xx` 不自动跟随；响应体最多读 64 KiB；请求头必须单字节 ASCII（中文放请求体）。
 - 正文上限：Webhook 21000 字；Web Push 载荷正文 400 字（推送服务 4 KiB 硬限）。
 - `/save` 有字段白名单：`pushVapidPrivateKey`、`pushSubscriptions` 永不下发、也不可被保存请求覆盖；配置写回串行化。
